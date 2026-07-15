@@ -1,0 +1,320 @@
+/**
+ * GitSage AI — Panel Provider (WebviewViewProvider)
+ *
+ * Hosts the sidebar Intelligence Panel. Manages:
+ *   - HTML/CSS/JS webview lifecycle
+ *   - Bidirectional message bus (extension ↔ webview)
+ *   - Message routing for commit acceptance, login, key generation, etc.
+ */
+
+import * as vscode from "vscode";
+import * as path from "path";
+import * as fs from "fs";
+import { getKeyManager } from "../auth/keyManager";
+import { getClient } from "../api/gitsageClient";
+import { getDiffProvider } from "../git/diffProvider";
+import {
+  handleWebviewLogin,
+  handleWebviewSignup,
+} from "../commands/authCommand";
+
+export const VIEW_ID = "gitsage.panel";
+
+// ─── Types for messages ───────────────────────────────────────────────────────
+
+interface WebviewMessage {
+  type: string;
+  payload?: any;
+}
+
+// ─── Provider ────────────────────────────────────────────────────────────────
+
+export class PanelProvider implements vscode.WebviewViewProvider {
+  private _view?: vscode.WebviewView;
+  private readonly _extensionUri: vscode.Uri;
+  private readonly _context: vscode.ExtensionContext;
+
+  constructor(context: vscode.ExtensionContext) {
+    this._extensionUri = context.extensionUri;
+    this._context = context;
+  }
+
+  resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    _resolveContext: vscode.WebviewViewResolveContext,
+    _token: vscode.CancellationToken
+  ): void {
+    this._view = webviewView;
+
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(this._extensionUri, "media"),
+        vscode.Uri.joinPath(this._extensionUri, "out"),
+      ],
+    };
+
+    webviewView.webview.html = this._buildHtml(webviewView.webview);
+
+    // Handle messages FROM the webview
+    webviewView.webview.onDidReceiveMessage(
+      (message: WebviewMessage) => this._handleMessage(message),
+      undefined,
+      this._context.subscriptions
+    );
+
+    // Push initial auth state when panel first opens
+    this._sendInitialState();
+  }
+
+  /** Post a message TO the webview. */
+  postMessage(message: WebviewMessage): void {
+    this._view?.webview.postMessage(message);
+  }
+
+  // ─── Message Handler ───────────────────────────────────────────────────────
+
+  private async _handleMessage(message: WebviewMessage): Promise<void> {
+    const { type, payload } = message;
+
+    switch (type) {
+      // ── Auth ──
+      case "LOGIN": {
+        const result = await handleWebviewLogin(payload.email, payload.password);
+        this.postMessage({ type: "LOGIN_RESPONSE", payload: result });
+        if (result.success) {
+          await this._sendInitialState();
+        }
+        break;
+      }
+
+      case "SIGNUP": {
+        const result = await handleWebviewSignup(payload.email, payload.password, payload.name);
+        this.postMessage({ type: "SIGNUP_RESPONSE", payload: result });
+        if (result.success) {
+          await this._sendInitialState();
+        }
+        break;
+      }
+
+      case "SAVE_API_KEY": {
+        const km = getKeyManager();
+        await km.saveApiKey(payload.apiKey);
+        this.postMessage({ type: "AUTH_STATE_CHANGED", payload: { hasApiKey: true } });
+        vscode.window.showInformationMessage("✅ GitSage: API key saved.");
+        break;
+      }
+
+      case "LOGOUT": {
+        await getKeyManager().clearAll();
+        this.postMessage({
+          type: "AUTH_STATE_CHANGED",
+          payload: { hasApiKey: false, hasJwt: false, user: null },
+        });
+        break;
+      }
+
+      case "GET_AUTH_STATE": {
+        await this._sendInitialState();
+        break;
+      }
+
+      // ── Commit acceptance ──
+      case "COMMIT_ACCEPTED": {
+        const diffProvider = getDiffProvider();
+        const result = await diffProvider.performCommit(payload.message);
+        if (result.success) {
+          this.postMessage({ type: "COMMIT_SUCCESS" });
+          vscode.window.showInformationMessage(
+            `✅ GitSage: Committed — "${payload.message}"`
+          );
+        } else {
+          this.postMessage({
+            type: "COMMIT_ERROR",
+            payload: { error: result.error },
+          });
+          vscode.window.showErrorMessage(`GitSage: Commit failed — ${result.error}`);
+        }
+        break;
+      }
+
+      case "COPY_COMMIT_TO_SCM": {
+        this._injectIntoScm(payload.message);
+        break;
+      }
+
+      // ── API Key management ──
+      case "LIST_KEYS": {
+        const km = getKeyManager();
+        const jwt = await km.getJwtToken();
+        if (!jwt) {
+          this.postMessage({ type: "KEYS_RESPONSE", payload: { error: "Not logged in", keys: [] } });
+          break;
+        }
+        try {
+          const keys = await getClient().listApiKeys(jwt);
+          this.postMessage({ type: "KEYS_RESPONSE", payload: { keys } });
+        } catch (err) {
+          const error = err instanceof Error ? err.message : "Failed to fetch keys";
+          this.postMessage({ type: "KEYS_RESPONSE", payload: { error, keys: [] } });
+        }
+        break;
+      }
+
+      case "GENERATE_KEY": {
+        const km = getKeyManager();
+        const jwt = await km.getJwtToken();
+        if (!jwt) { break; }
+        try {
+          const newKey = await getClient().generateApiKey(jwt, payload.name || "VS Code Key");
+          // Also save the raw key as the active API key
+          await km.saveApiKey(newKey.key);
+          this.postMessage({ type: "KEY_GENERATED", payload: newKey });
+        } catch (err) {
+          const error = err instanceof Error ? err.message : "Failed to generate key";
+          this.postMessage({ type: "KEY_GENERATE_ERROR", payload: { error } });
+        }
+        break;
+      }
+
+      case "REVOKE_KEY": {
+        const km = getKeyManager();
+        const jwt = await km.getJwtToken();
+        if (!jwt || !payload.id) { break; }
+        try {
+          await getClient().revokeApiKey(jwt, payload.id);
+          this.postMessage({ type: "KEY_REVOKED", payload: { id: payload.id } });
+        } catch (err) {
+          const error = err instanceof Error ? err.message : "Failed to revoke key";
+          this.postMessage({ type: "KEY_REVOKE_ERROR", payload: { error } });
+        }
+        break;
+      }
+
+      // ── Usage stats ──
+      case "GET_USAGE": {
+        const km = getKeyManager();
+        const jwt = await km.getJwtToken();
+        if (!jwt) { break; }
+        try {
+          const stats = await getClient().getUsageStats(jwt, payload?.period ?? "30d");
+          this.postMessage({ type: "USAGE_RESPONSE", payload: stats });
+        } catch (err) {
+          this.postMessage({ type: "USAGE_RESPONSE", payload: null });
+        }
+        break;
+      }
+
+      // ── Open external links ──
+      case "OPEN_EXTERNAL": {
+        vscode.env.openExternal(vscode.Uri.parse(payload.url));
+        break;
+      }
+
+      // ── Trigger commands from panel ──
+      case "RUN_COMMIT_COMMAND": {
+        vscode.commands.executeCommand("gitsage.commit");
+        break;
+      }
+
+      case "RUN_EXPLAIN_COMMAND": {
+        vscode.commands.executeCommand("gitsage.explain");
+        break;
+      }
+    }
+  }
+
+  // ─── Initial state sync ────────────────────────────────────────────────────
+
+  private async _sendInitialState(): Promise<void> {
+    const km = getKeyManager();
+    const [authState, userProfile] = await Promise.all([
+      km.getAuthState(),
+      km.getUserProfile(),
+    ]);
+
+    const hasApiKey = authState === "full" || authState === "apiKey";
+    const hasJwt    = authState === "full" || authState === "jwt";
+
+    this.postMessage({
+      type: "INIT_STATE",
+      payload: {
+        hasApiKey,
+        hasJwt,
+        authState,
+        user: userProfile,
+      },
+    });
+  }
+
+  // ─── SCM injection ─────────────────────────────────────────────────────────
+
+  private _injectIntoScm(message: string): void {
+    try {
+      const gitExtension = vscode.extensions.getExtension("vscode.git")?.exports;
+      if (!gitExtension) { return; }
+      const api = gitExtension.getAPI(1);
+      const repo = api.repositories?.[0];
+      if (repo?.inputBox) {
+        repo.inputBox.value = message;
+        vscode.window.showInformationMessage("GitSage: Commit message copied to SCM input box.");
+      }
+    } catch { /* silent */ }
+  }
+
+  // ─── HTML builder ──────────────────────────────────────────────────────────
+
+  private _buildHtml(webview: vscode.Webview): string {
+    const nonce = getNonce();
+
+    const cssUri   = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "panel.css")
+    );
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "panel.js")
+    );
+
+    return /* html */ `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none';
+             style-src ${webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com;
+             font-src https://fonts.gstatic.com;
+             img-src ${webview.cspSource} https: data:;
+             script-src 'nonce-${nonce}';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="${cssUri}" rel="stylesheet" />
+  <title>GitSage AI</title>
+</head>
+<body>
+  <div id="app"></div>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+}
+
+// ─── Singleton management ─────────────────────────────────────────────────────
+
+let _panelProvider: PanelProvider | undefined;
+
+export function createPanelProvider(context: vscode.ExtensionContext): PanelProvider {
+  _panelProvider = new PanelProvider(context);
+  return _panelProvider;
+}
+
+export function getPanelProvider(): PanelProvider | undefined {
+  return _panelProvider;
+}
+
+function getNonce(): string {
+  let text = "";
+  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
+}
