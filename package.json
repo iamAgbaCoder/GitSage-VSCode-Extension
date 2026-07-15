@@ -1,0 +1,187 @@
+{
+  "name": "gitsage-ai",
+  "displayName": "GitSage AI",
+  "description": "AI-powered Git commit assistant — one-click, production-quality commits with explanations, confidence scores, and full intelligence reports.",
+  "version": "0.1.0",
+  "publisher": "gitsage",
+  "icon": "media/gitsage-icon.png",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iamAgbaCoder/GitSage-VSCode-Extension"
+  },
+  "homepage": "https://gitsage-ai.vercel.app",
+  "bugs": {
+    "url": "https://github.com/iamAgbaCoder/GitSage-VSCode-Extension/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers",
+    "AI"
+  ],
+  "keywords": [
+    "git",
+    "commit",
+    "ai",
+    "conventional commits",
+    "gitsage",
+    "cursor",
+    "copilot"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitsage-container",
+          "title": "GitSage AI",
+          "icon": "media/gitsage-activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitsage-container": [
+        {
+          "type": "webview",
+          "id": "gitsage.panel",
+          "name": "Intelligence Panel",
+          "icon": "media/gitsage-activitybar.svg",
+          "contextualTitle": "GitSage AI"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gitsage.commit",
+        "title": "Analyze & Commit",
+        "category": "GitSage",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "gitsage.explain",
+        "title": "Explain Changes",
+        "category": "GitSage",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "gitsage.showPanel",
+        "title": "Open Intelligence Panel",
+        "category": "GitSage",
+        "icon": "$(robot)"
+      },
+      {
+        "command": "gitsage.setApiKey",
+        "title": "Set API Key",
+        "category": "GitSage",
+        "icon": "$(key)"
+      },
+      {
+        "command": "gitsage.clearApiKey",
+        "title": "Clear API Key",
+        "category": "GitSage",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "gitsage.scmGenerate",
+        "title": "$(sparkle) Generate with GitSage AI",
+        "category": "GitSage"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "gitsage.scmGenerate",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gitsage.commit",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "gitsage.explain",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "gitsage.scmGenerate",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "gitsage.commit",
+        "key": "ctrl+shift+g ctrl+shift+c",
+        "mac": "cmd+shift+g cmd+shift+c",
+        "when": "workspaceFolderCount > 0"
+      }
+    ],
+    "configuration": {
+      "title": "GitSage AI",
+      "properties": {
+        "gitsage.apiBaseUrl": {
+          "type": "string",
+          "default": "https://gitsage-api.up.railway.app",
+          "description": "Base URL for the GitSage backend API. Change this if you are self-hosting."
+        },
+        "gitsage.commitStyle": {
+          "type": "string",
+          "default": "conventional",
+          "enum": [
+            "conventional",
+            "simple",
+            "emoji"
+          ],
+          "enumDescriptions": [
+            "Conventional Commits format: feat(scope): message",
+            "Simple one-liner commit message",
+            "Emoji-prefixed commit message: ✨ feat: message"
+          ],
+          "description": "The commit message style GitSage should generate."
+        },
+        "gitsage.autoStagedCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn and prompt to stage files when no staged changes are detected."
+        },
+        "gitsage.scmIntegration": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the 'Generate with GitSage AI' button in the Source Control view title bar."
+        },
+        "gitsage.telemetry": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send anonymous usage telemetry to help improve GitSage. No code or diffs are ever sent."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "deploy": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.11.5",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.3.8",
+    "@vscode/vsce": "^2.23.0",
+    "esbuild": "^0.20.0",
+    "mocha": "^10.3.0",
+    "typescript": "^5.3.3"
+  }
+}
