@@ -1,8 +1,0 @@
-2026-07-17 17:43:46.461 [info] StorageMainService: creating application shared storage
-2026-07-17 17:43:46.462 [info] [shared storage] Creating shared storage database at ':memory:' (wasCreated: true)
-2026-07-17 17:43:46.462 [info] [shared storage] Initializing fallback application storage (path: in-memory)
-2026-07-17 17:43:48.690 [info] [shared storage] Fallback application storage initialized with 3 items
-2026-07-17 17:43:48.713 [info] update#setState disabled
-2026-07-17 17:43:48.715 [info] update#ctor - updates are disabled by the environment
-2026-07-17 17:44:01.086 [error] CodeWindow: detected unresponsive
-2026-07-17 17:44:01.764 [error] CodeWindow: recovered from unresponsive
