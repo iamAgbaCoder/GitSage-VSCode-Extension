@@ -46,7 +46,7 @@ export interface DiffResult {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function isSensitiveFile(filePath: string): boolean {
+export function isSensitiveFile(filePath: string): boolean {
   return SENSITIVE_PATTERNS.some((pattern) => pattern.test(filePath));
 }
 
@@ -63,7 +63,7 @@ function runGit(command: string, cwd: string): Promise<string> {
   });
 }
 
-function filterSensitiveFiles(rawDiff: string): {
+export function filterSensitiveFiles(rawDiff: string): {
   cleanedDiff: string;
   filteredFiles: string[];
 } {

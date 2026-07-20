@@ -432,20 +432,21 @@ function buildKeyItem(k: ApiKey): string {
 // ─── Account Tab ──────────────────────────────────────────────────────────────
 
 function buildAccountTab(): string {
-  if (state.hasJwt && state.user) {
-    return buildAccountInfo();
+  const user = state.user;
+  if (state.hasJwt && user) {
+    return buildAccountInfo(user);
   }
   return buildAuthForm();
 }
 
-function buildAccountInfo(): string {
+function buildAccountInfo(user: { name: string; email: string }): string {
   return `
     <div class="gs-animate-in" style="display:flex;flex-direction:column;gap:10px;">
       <div class="gs-card gs-card--sage">
         <div class="gs-card__body" style="display:flex;flex-direction:column;gap:8px;">
           <div class="gs-section-label">Logged In As</div>
-          <div style="font-size:13px;font-weight:700;color:var(--text)">${escHtml(state.user.name)}</div>
-          <div style="font-size:11px;color:var(--text-muted)">${escHtml(state.user.email)}</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text)">${escHtml(user.name)}</div>
+          <div style="font-size:11px;color:var(--text-muted)">${escHtml(user.email)}</div>
           <div class="gs-btn-row mt-6">
             <button class="gs-btn gs-btn--ghost" id="btn-logout">Sign Out</button>
             <button class="gs-btn gs-btn--sky"   id="btn-open-portal">Portal ↗</button>

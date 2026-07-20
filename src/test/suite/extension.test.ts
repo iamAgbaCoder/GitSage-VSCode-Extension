@@ -1,35 +1,43 @@
 import * as assert from "assert";
-import * as path from "path";
 
 suite("GitSage Extension Test Suite", () => {
-  // ── DiffProvider tests ──────────────────────────────────────────────────────
+  test("DiffProvider: filters sensitive files from raw diff", async () => {
+    const { filterSensitiveFiles } = await import("../../git/diffProvider");
 
-  test("DiffProvider: filters sensitive files", async () => {
-    const { DiffProvider } = await import("../../git/diffProvider");
+    const rawDiff = [
+      "diff --git a/.env b/.env",
+      "@@ -0,0 +1 @@",
+      "+SECRET_KEY=abc123",
+      "diff --git a/src/app.ts b/src/app.ts",
+      "@@ -1 +1 @@",
+      "+console.log(\"hi\")",
+    ].join("\n");
 
-    const provider = new DiffProvider(process.cwd());
-    // @ts-ignore - access private for testing
-    const { cleanedDiff, filteredFiles } = (provider as any).__proto__
-      ? (() => {
-          // Call the module-level helper directly
-          const rawDiff = `diff --git a/.env b/.env\n@@ -0,0 +1 @@\n+SECRET_KEY=abc123\ndiff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n+console.log("hi")`;
-          // We can't access private directly, so we test via the public interface
-          return { cleanedDiff: rawDiff, filteredFiles: [".env"] };
-        })()
-      : { cleanedDiff: "", filteredFiles: [] };
+    const result = filterSensitiveFiles(rawDiff);
 
-    assert.ok(filteredFiles.includes(".env"), "Should filter .env file");
+    assert.deepStrictEqual(result.filteredFiles, [".env"]);
+    assert.ok(result.cleanedDiff.includes("src/app.ts"));
+    assert.ok(!result.cleanedDiff.includes(".env"));
   });
 
-  // ── KeyManager tests ────────────────────────────────────────────────────────
+  test("DiffProvider: sensitive filename detection matches common secret paths", async () => {
+    const { isSensitiveFile } = await import("../../git/diffProvider");
+
+    assert.strictEqual(isSensitiveFile(".env"), true);
+    assert.strictEqual(isSensitiveFile("config/private_key.pem"), true);
+    assert.strictEqual(isSensitiveFile("src/app.ts"), false);
+  });
 
   test("KeyManager: stores and retrieves API key", async () => {
-    // Mock SecretStorage
     const stored = new Map<string, string>();
     const mockSecrets = {
       get: async (key: string) => stored.get(key),
-      store: async (key: string, value: string) => { stored.set(key, value); },
-      delete: async (key: string) => { stored.delete(key); },
+      store: async (key: string, value: string) => {
+        stored.set(key, value);
+      },
+      delete: async (key: string) => {
+        stored.delete(key);
+      },
       onDidChange: { event: () => ({}) },
     } as any;
 
@@ -37,20 +45,22 @@ suite("GitSage Extension Test Suite", () => {
     const km = new KeyManager(mockSecrets);
 
     await km.saveApiKey("gs_test_key_123");
-    const retrieved = await km.getApiKey();
-    assert.strictEqual(retrieved, "gs_test_key_123");
+    assert.strictEqual(await km.getApiKey(), "gs_test_key_123");
 
     await km.clearApiKey();
-    const cleared = await km.getApiKey();
-    assert.strictEqual(cleared, undefined);
+    assert.strictEqual(await km.getApiKey(), undefined);
   });
 
-  test("KeyManager: getAuthState returns correct state", async () => {
+  test("KeyManager: getAuthState returns the strongest available state", async () => {
     const stored = new Map<string, string>();
     const mockSecrets = {
       get: async (key: string) => stored.get(key),
-      store: async (key: string, value: string) => { stored.set(key, value); },
-      delete: async (key: string) => { stored.delete(key); },
+      store: async (key: string, value: string) => {
+        stored.set(key, value);
+      },
+      delete: async (key: string) => {
+        stored.delete(key);
+      },
     } as any;
 
     const { KeyManager } = await import("../../auth/keyManager");
@@ -65,23 +75,10 @@ suite("GitSage Extension Test Suite", () => {
     assert.strictEqual(await km.getAuthState(), "full");
   });
 
-  // ── GitSageClient tests ─────────────────────────────────────────────────────
-
-  test("GitSageClient: constructs correct request path", async () => {
+  test("GitSageClient: builds against configured base URL", async () => {
     const { GitSageClient } = await import("../../api/gitsageClient");
     const client = new GitSageClient("https://gitsage-api.up.railway.app");
-    // Just verify instantiation without errors
-    assert.ok(client, "Client should instantiate");
-  });
 
-  // ── parseCommitMessage utility ──────────────────────────────────────────────
-
-  test("parseCommitMessage: correctly splits conventional commit", () => {
-    const msg = "feat(auth): add JWT token expiry validation";
-    const match = msg.match(/^(\w+)(?:\(([^)]+)\))?: (.+)/);
-    assert.ok(match, "Should match conventional commit pattern");
-    assert.strictEqual(match![1], "feat");
-    assert.strictEqual(match![2], "auth");
-    assert.strictEqual(match![3], "add JWT token expiry validation");
+    assert.ok(client);
   });
 });

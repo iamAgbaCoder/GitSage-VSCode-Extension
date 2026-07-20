@@ -273,27 +273,14 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, "media", "panel.js")
     );
+    const htmlPath = vscode.Uri.joinPath(this._extensionUri, "media", "panel.html");
+    const template = fs.readFileSync(htmlPath.fsPath, "utf8");
 
-    return /* html */ `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none';
-             style-src ${webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com;
-             font-src https://fonts.gstatic.com;
-             img-src ${webview.cspSource} https: data:;
-             script-src 'nonce-${nonce}';" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
-  <link href="${cssUri}" rel="stylesheet" />
-  <title>GitSage AI</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
-</body>
-</html>`;
+    return template
+      .replaceAll("{{CSP_SOURCE}}", webview.cspSource)
+      .replaceAll("{{NONCE}}", nonce)
+      .replaceAll("{{CSS_URI}}", cssUri.toString())
+      .replaceAll("{{SCRIPT_URI}}", scriptUri.toString());
   }
 }
 
