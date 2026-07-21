@@ -10,13 +10,10 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import { exec } from "child_process";
 import { getKeyManager } from "../auth/keyManager";
 import { getClient } from "../api/gitsageClient";
 import { getDiffProvider } from "../git/diffProvider";
-import {
-  handleWebviewLogin,
-  handleWebviewSignup,
-} from "../commands/authCommand";
 
 export const VIEW_ID = "gitsage.panel";
 
@@ -79,21 +76,8 @@ export class PanelProvider implements vscode.WebviewViewProvider {
 
     switch (type) {
       // ── Auth ──
-      case "LOGIN": {
-        const result = await handleWebviewLogin(payload.email, payload.password);
-        this.postMessage({ type: "LOGIN_RESPONSE", payload: result });
-        if (result.success) {
-          await this._sendInitialState();
-        }
-        break;
-      }
-
-      case "SIGNUP": {
-        const result = await handleWebviewSignup(payload.email, payload.password, payload.name);
-        this.postMessage({ type: "SIGNUP_RESPONSE", payload: result });
-        if (result.success) {
-          await this._sendInitialState();
-        }
+      case "TRIGGER_SIGN_IN": {
+        vscode.commands.executeCommand("gitsage.signIn");
         break;
       }
 
@@ -116,6 +100,75 @@ export class PanelProvider implements vscode.WebviewViewProvider {
 
       case "GET_AUTH_STATE": {
         await this._sendInitialState();
+        break;
+      }
+
+      case "GET_GIT_HISTORY": {
+        const folders = vscode.workspace.workspaceFolders;
+        if (!folders || folders.length === 0) {
+          this.postMessage({ type: "GIT_HISTORY_RESPONSE", payload: { commits: [] } });
+          break;
+        }
+        const cwd = folders[0].uri.fsPath;
+        exec(
+          `git log -n 10 --pretty=format:"%h||%an||%ar||%s"`,
+          { cwd, timeout: 5000 },
+          (err, stdout) => {
+            if (err || !stdout) {
+              this.postMessage({ type: "GIT_HISTORY_RESPONSE", payload: { commits: [] } });
+              return;
+            }
+            const commits = stdout.trim().split("\n").map(line => {
+              const [hash, author, date, subject] = line.split("||");
+              return { hash, author, date, subject };
+            });
+            this.postMessage({ type: "GIT_HISTORY_RESPONSE", payload: { commits } });
+          }
+        );
+        break;
+      }
+
+      case "GET_SETTINGS": {
+        const config = vscode.workspace.getConfiguration("gitsage");
+        this.postMessage({
+          type: "SETTINGS_RESPONSE",
+          payload: {
+            commitStyle: config.get<string>("commitStyle", "conventional"),
+            autoStagedCheck: config.get<boolean>("autoStagedCheck", true),
+            scmIntegration: config.get<boolean>("scmIntegration", true),
+            apiBaseUrl: config.get<string>("apiBaseUrl", "https://gitsage-api.up.railway.app")
+          }
+        });
+        break;
+      }
+
+      case "UPDATE_SETTINGS": {
+        const config = vscode.workspace.getConfiguration("gitsage");
+        const { commitStyle, autoStagedCheck, scmIntegration, apiBaseUrl } = payload;
+        
+        if (commitStyle !== undefined) {
+          await config.update("commitStyle", commitStyle, vscode.ConfigurationTarget.Global);
+        }
+        if (autoStagedCheck !== undefined) {
+          await config.update("autoStagedCheck", autoStagedCheck, vscode.ConfigurationTarget.Global);
+        }
+        if (scmIntegration !== undefined) {
+          await config.update("scmIntegration", scmIntegration, vscode.ConfigurationTarget.Global);
+        }
+        if (apiBaseUrl !== undefined) {
+          await config.update("apiBaseUrl", apiBaseUrl, vscode.ConfigurationTarget.Global);
+        }
+
+        // Return updated settings
+        this.postMessage({
+          type: "SETTINGS_RESPONSE",
+          payload: {
+            commitStyle: config.get<string>("commitStyle", "conventional"),
+            autoStagedCheck: config.get<boolean>("autoStagedCheck", true),
+            scmIntegration: config.get<boolean>("scmIntegration", true),
+            apiBaseUrl: config.get<string>("apiBaseUrl", "https://gitsage-api.up.railway.app")
+          }
+        });
         break;
       }
 
@@ -221,7 +274,24 @@ export class PanelProvider implements vscode.WebviewViewProvider {
         vscode.commands.executeCommand("gitsage.explain");
         break;
       }
+
+      // ── Tab navigation from extension host ──
+      case "SWITCH_TAB": {
+        // Forward directly to webview (webview handles its own tab state)
+        this.postMessage({ type: "SWITCH_TAB", payload });
+        break;
+      }
+
+      // ── Open external links ──
+      case "OPEN_EXTERNAL": {
+        vscode.env.openExternal(vscode.Uri.parse(payload.url));
+        break;
+      }
     }
+  }
+
+  public async refreshAuthState(): Promise<void> {
+    await this._sendInitialState();
   }
 
   // ─── Initial state sync ────────────────────────────────────────────────────

@@ -14,7 +14,15 @@ import { resetClient } from "./api/gitsageClient";
 import { resetDiffProvider } from "./git/diffProvider";
 import { commitCommand } from "./commands/commitCommand";
 import { explainCommand } from "./commands/explainCommand";
-import { setApiKeyCommand, clearApiKeyCommand } from "./commands/authCommand";
+import {
+  setApiKeyCommand,
+  clearApiKeyCommand,
+  signInCommand,
+  signOutCommand,
+  openAccountCommand,
+  generateKeyCommand,
+} from "./commands/authCommand";
+import { GitSageUriHandler } from "./auth/uriHandler";
 import {
   createPanelProvider,
   VIEW_ID,
@@ -26,6 +34,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // ── 1. Initialize core singletons ──────────────────────────────────────────
   createKeyManager(context.secrets);
+
+  // Register UriHandler for browser-based auth flow
+  const uriHandler = new GitSageUriHandler(context);
+  context.subscriptions.push(
+    vscode.window.registerUriHandler(uriHandler)
+  );
 
   // ── 2. Register WebviewViewProvider (sidebar panel) ───────────────────────
   const panelProvider = createPanelProvider(context);
@@ -62,6 +76,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand("gitsage.clearApiKey", () =>
       clearApiKeyCommand()
+    ),
+
+    // Browser auth commands
+    vscode.commands.registerCommand("gitsage.signIn", () =>
+      signInCommand(context)
+    ),
+
+    vscode.commands.registerCommand("gitsage.signOut", () =>
+      signOutCommand()
+    ),
+
+    vscode.commands.registerCommand("gitsage.openAccount", () =>
+      openAccountCommand()
+    ),
+
+    vscode.commands.registerCommand("gitsage.generateKey", () =>
+      generateKeyCommand()
     )
   );
 

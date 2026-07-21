@@ -1,10 +1,10 @@
 /**
  * GitSage AI — Webview Panel Main Script
  *
- * Self-contained TypeScript/JS that runs inside the VS Code webview.
  * Communicates with the extension host via postMessage / onDidReceiveMessage.
  *
- * Tabs: Commit | Explain | Keys | Account
+ * Tabs: Commit | Explain | History | Keys | Usage | Settings | Account
+ * Auth: Browser-based (no in-webview password forms)
  */
 
 // ─── VS Code API bridge ───────────────────────────────────────────────────────
@@ -16,9 +16,12 @@ declare const acquireVsCodeApi: () => {
 
 const vscode = acquireVsCodeApi();
 
-// ─── State ────────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type TabId = "commit" | "explain" | "history" | "keys" | "usage" | "settings" | "account";
+
 interface AppState {
-  activeTab: "commit" | "explain" | "keys" | "account";
+  activeTab: TabId;
   hasApiKey: boolean;
   hasJwt: boolean;
   authState: "full" | "apiKey" | "jwt" | "none";
@@ -33,8 +36,10 @@ interface AppState {
   keys: ApiKey[];
   newKey: NewKeyData | null;
   usageStats: UsageStats | null;
-  loginMode: "login" | "signup";
-  loginError: string | null;
+  gitHistory: GitCommit[];
+  historyLoading: boolean;
+  settings: Settings | null;
+  settingsSaved: boolean;
   toast: Toast | null;
 }
 
@@ -79,10 +84,26 @@ interface UsageStats {
   total_files_analyzed?: number;
 }
 
+interface GitCommit {
+  hash: string;
+  author: string;
+  date: string;
+  subject: string;
+}
+
+interface Settings {
+  commitStyle: "conventional" | "simple" | "emoji";
+  autoStagedCheck: boolean;
+  scmIntegration: boolean;
+  apiBaseUrl: string;
+}
+
 interface Toast {
   message: string;
   type: "success" | "error" | "info";
 }
+
+// ─── State ────────────────────────────────────────────────────────────────────
 
 let state: AppState = {
   activeTab: "commit",
@@ -100,8 +121,10 @@ let state: AppState = {
   keys: [],
   newKey: null,
   usageStats: null,
-  loginMode: "login",
-  loginError: null,
+  gitHistory: [],
+  historyLoading: false,
+  settings: null,
+  settingsSaved: false,
   toast: null,
 };
 
@@ -128,33 +151,38 @@ function buildHtml(): string {
 // ─── Header ───────────────────────────────────────────────────────────────────
 
 function buildHeader(): string {
+  const badge = state.authState === "none"
+    ? "Not connected"
+    : state.user?.name?.split(" ")[0] ?? "Connected";
   return `
     <div class="gs-header">
       <div class="gs-header__logo">
         <div class="gs-header__dot"></div>
         <span class="gs-header__title">GitSage AI</span>
       </div>
-      <div class="gs-header__badge">
-        ${state.authState === "none" ? "Not connected" : state.user?.name ?? "Connected"}
-      </div>
+      <div class="gs-header__badge">${escHtml(badge)}</div>
     </div>`;
 }
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-const TABS: Array<{ id: AppState["activeTab"]; label: string; icon: string }> = [
-  { id: "commit",  label: "Commit",  icon: svgSparkle() },
-  { id: "explain", label: "Explain", icon: svgBulb() },
-  { id: "keys",    label: "Keys",    icon: svgKey() },
-  { id: "account", label: "Account", icon: svgUser() },
+const TABS: Array<{ id: TabId; label: string; icon: string }> = [
+  { id: "commit",   label: "Commit",   icon: svgSparkle() },
+  { id: "explain",  label: "Explain",  icon: svgBulb() },
+  { id: "history",  label: "History",  icon: svgHistory() },
+  { id: "keys",     label: "Keys",     icon: svgKey() },
+  { id: "usage",    label: "Usage",    icon: svgChart() },
+  { id: "settings", label: "Settings", icon: svgSettings() },
+  { id: "account",  label: "Account",  icon: svgUser() },
 ];
 
 function buildTabs(): string {
   return `
-    <div class="gs-tabs">
+    <div class="gs-tabs gs-tabs--scroll">
       ${TABS.map(t => `
-        <button class="gs-tab${state.activeTab === t.id ? " active" : ""}" data-tab="${t.id}">
-          ${t.icon} ${t.label}
+        <button class="gs-tab${state.activeTab === t.id ? " active" : ""}" data-tab="${t.id}" title="${t.label}">
+          ${t.icon}
+          <span class="gs-tab__label">${t.label}</span>
         </button>
       `).join("")}
     </div>`;
@@ -164,10 +192,13 @@ function buildTabs(): string {
 
 function buildTabContent(): string {
   switch (state.activeTab) {
-    case "commit":  return buildCommitTab();
-    case "explain": return buildExplainTab();
-    case "keys":    return buildKeysTab();
-    case "account": return buildAccountTab();
+    case "commit":   return buildCommitTab();
+    case "explain":  return buildExplainTab();
+    case "history":  return buildHistoryTab();
+    case "keys":     return buildKeysTab();
+    case "usage":    return buildUsageTab();
+    case "settings": return buildSettingsTab();
+    case "account":  return buildAccountTab();
   }
 }
 
@@ -177,11 +208,9 @@ function buildCommitTab(): string {
   if (state.loading && state.loadingMode === "commit") {
     return buildLoadingState(state.loadingStep);
   }
-
   if (state.commitResult) {
     return buildCommitResult(state.commitResult);
   }
-
   return buildCommitIdle();
 }
 
@@ -198,9 +227,9 @@ function buildCommitIdle(): string {
           <div class="gs-card__body">
             <div class="gs-section-label text-red">⚠ No API Key</div>
             <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">
-              Add your GitSage API key to start generating commits.
+              Sign in or add an API key to start generating commits.
             </div>
-            <button class="gs-btn gs-btn--primary w-full" id="btn-add-key-from-commit">Add API Key</button>
+            <button class="gs-btn gs-btn--primary w-full" id="btn-goto-account-from-commit">Sign In / Add Key</button>
           </div>
         </div>
       ` : `
@@ -261,9 +290,7 @@ function buildCommitResult(r: CommitResult): string {
       </div>
       <div class="gs-card__body" style="display:flex;flex-direction:column;gap:12px;">
         ${editContent}
-
         ${!state.editMode ? `
-        <!-- Confidence bar -->
         <div class="gs-confidence">
           <div class="gs-confidence__header">
             <span>Trust Index</span>
@@ -273,8 +300,6 @@ function buildCommitResult(r: CommitResult): string {
             <div class="gs-confidence__fill" id="conf-bar" style="width:0%"></div>
           </div>
         </div>
-
-        <!-- Affected files -->
         ${r.stagedFiles && r.stagedFiles.length > 0 ? `
         <div>
           <div class="gs-section-label">Affected Scopes</div>
@@ -282,8 +307,6 @@ function buildCommitResult(r: CommitResult): string {
             ${r.stagedFiles.map(f => `<span class="gs-chip">${escHtml(f.split("/").pop() ?? f)}</span>`).join("")}
           </div>
         </div>` : ""}
-
-        <!-- Meta row -->
         <div class="gs-meta">
           <span>${escHtml(r.provider)}</span>
           <span class="gs-meta__sep">·</span>
@@ -303,11 +326,9 @@ function buildExplainTab(): string {
   if (state.loading && state.loadingMode === "explain") {
     return buildLoadingState(state.loadingStep);
   }
-
   if (state.explainResult) {
     return buildExplainResult(state.explainResult);
   }
-
   return `
     <div class="gs-empty">
       <div class="gs-empty__icon">${svgBulb()}</div>
@@ -319,9 +340,12 @@ function buildExplainTab(): string {
         <button class="gs-btn gs-btn--sky w-full" id="btn-run-explain" style="margin-top:8px;">
           ${svgBulb()} Generate Explanation
         </button>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">
+          Shortcut: <span class="font-mono text-sage">Ctrl+Shift+G, Ctrl+Shift+E</span>
+        </div>
       ` : `
-        <button class="gs-btn gs-btn--primary w-full" id="btn-add-key-from-explain" style="margin-top:8px;">
-          Add API Key First
+        <button class="gs-btn gs-btn--primary w-full" id="btn-goto-account-from-explain" style="margin-top:8px;">
+          Sign In / Add API Key First
         </button>
       `}
     </div>`;
@@ -354,6 +378,45 @@ function buildExplainResult(r: ExplainResult): string {
     </div>`;
 }
 
+// ─── History Tab ──────────────────────────────────────────────────────────────
+
+function buildHistoryTab(): string {
+  if (state.historyLoading) {
+    return buildLoadingState("Loading git history...");
+  }
+  if (state.gitHistory.length === 0) {
+    return `
+      <div class="gs-empty">
+        <div class="gs-empty__icon">${svgHistory()}</div>
+        <div class="gs-empty__title">No Commits Found</div>
+        <div class="gs-empty__desc">Open a Git repository to view recent commit history.</div>
+        <button class="gs-btn gs-btn--ghost w-full" id="btn-refresh-history" style="margin-top:8px;">
+          ⟳ Refresh History
+        </button>
+      </div>`;
+  }
+  return `
+    <div class="gs-animate-in" style="display:flex;flex-direction:column;gap:6px;">
+      <div class="gs-section-label" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Recent Commits</span>
+        <button class="gs-icon-btn" id="btn-refresh-history" title="Refresh">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+        </button>
+      </div>
+      <div class="gs-history-list">
+        ${state.gitHistory.map(c => `
+          <div class="gs-history-item">
+            <span class="gs-history-item__hash">${escHtml(c.hash)}</span>
+            <div class="gs-history-item__main">
+              <div class="gs-history-item__subject">${escHtml(c.subject)}</div>
+              <div class="gs-history-item__meta">${escHtml(c.author)} &middot; ${escHtml(c.date)}</div>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>`;
+}
+
 // ─── Keys Tab ─────────────────────────────────────────────────────────────────
 
 function buildKeysTab(): string {
@@ -361,17 +424,16 @@ function buildKeysTab(): string {
     return `
       <div class="gs-empty">
         <div class="gs-empty__icon">${svgKey()}</div>
-        <div class="gs-empty__title">Login Required</div>
-        <div class="gs-empty__desc">Log in to manage your GitSage API keys and view usage statistics.</div>
-        <button class="gs-btn gs-btn--primary w-full" id="btn-go-login" style="margin-top:8px;">
-          Go to Account
+        <div class="gs-empty__title">Sign In Required</div>
+        <div class="gs-empty__desc">Sign in to manage your GitSage API keys and view usage statistics.</div>
+        <button class="gs-btn gs-btn--primary w-full" id="btn-signin-from-keys" style="margin-top:8px;">
+          Sign In with Browser
         </button>
       </div>`;
   }
 
   return `
     <div class="gs-animate-in" style="display:flex;flex-direction:column;gap:10px;">
-
       ${state.newKey ? `
         <div class="gs-key-reveal">
           <div class="gs-key-reveal__label">🔑 New Key — Copy Now (shown once)</div>
@@ -384,7 +446,7 @@ function buildKeysTab(): string {
       ` : ""}
 
       <button class="gs-btn gs-btn--primary w-full" id="btn-generate-key">
-        ${svgKey()} Rotate Master Key
+        ${svgKey()} Rotate API Key
       </button>
 
       <div class="gs-section-label">Active Keys</div>
@@ -394,20 +456,6 @@ function buildKeysTab(): string {
           No API keys found. Generate one above.
         </div>
       ` : state.keys.map(k => buildKeyItem(k)).join("")}
-
-      ${state.usageStats ? `
-        <div class="gs-section-label">Usage (30d)</div>
-        <div class="gs-stats-grid">
-          <div class="gs-stat-card">
-            <div class="gs-stat-card__label">Requests</div>
-            <div class="gs-stat-card__value">${state.usageStats.total_requests ?? 0}</div>
-          </div>
-          <div class="gs-stat-card">
-            <div class="gs-stat-card__label">Tokens</div>
-            <div class="gs-stat-card__value">${formatNumber(state.usageStats.total_tokens ?? 0)}</div>
-          </div>
-        </div>
-      ` : ""}
     </div>`;
 }
 
@@ -429,14 +477,130 @@ function buildKeyItem(k: ApiKey): string {
     </div>`;
 }
 
+// ─── Usage Tab ────────────────────────────────────────────────────────────────
+
+function buildUsageTab(): string {
+  if (!state.hasJwt) {
+    return `
+      <div class="gs-empty">
+        <div class="gs-empty__icon">${svgChart()}</div>
+        <div class="gs-empty__title">Sign In Required</div>
+        <div class="gs-empty__desc">Sign in to view your API usage statistics.</div>
+        <button class="gs-btn gs-btn--primary w-full" id="btn-signin-from-usage" style="margin-top:8px;">
+          Sign In with Browser
+        </button>
+      </div>`;
+  }
+
+  if (!state.usageStats) {
+    return `
+      <div class="gs-empty">
+        <div class="gs-empty__icon">${svgChart()}</div>
+        <div class="gs-empty__title">No Usage Data</div>
+        <div class="gs-empty__desc">Usage statistics will appear here after you start making requests.</div>
+      </div>`;
+  }
+
+  const stats = state.usageStats;
+  return `
+    <div class="gs-animate-in" style="display:flex;flex-direction:column;gap:10px;">
+      <div class="gs-section-label">Usage (${escHtml(stats.period)})</div>
+      <div class="gs-stats-grid">
+        <div class="gs-stat-card">
+          <div class="gs-stat-card__label">Requests</div>
+          <div class="gs-stat-card__value">${stats.total_requests ?? 0}</div>
+        </div>
+        <div class="gs-stat-card">
+          <div class="gs-stat-card__label">Tokens</div>
+          <div class="gs-stat-card__value">${formatNumber(stats.total_tokens ?? 0)}</div>
+        </div>
+        ${stats.total_files_analyzed ? `
+        <div class="gs-stat-card">
+          <div class="gs-stat-card__label">Files Analyzed</div>
+          <div class="gs-stat-card__value">${formatNumber(stats.total_files_analyzed)}</div>
+        </div>` : ""}
+      </div>
+      <button class="gs-btn gs-btn--ghost w-full" id="btn-refresh-usage" style="font-size:10px;">
+        ⟳ Refresh Stats
+      </button>
+      <button class="gs-btn gs-btn--ghost w-full" data-open="https://gitsage-ai.vercel.app/dashboard">
+        View Full Dashboard ↗
+      </button>
+    </div>`;
+}
+
+// ─── Settings Tab ─────────────────────────────────────────────────────────────
+
+function buildSettingsTab(): string {
+  const s = state.settings;
+  const commitStyle = s?.commitStyle ?? "conventional";
+  const apiBaseUrl = s?.apiBaseUrl ?? "https://gitsage-api.up.railway.app";
+
+  return `
+    <div class="gs-animate-in" style="display:flex;flex-direction:column;gap:10px;">
+      ${state.settingsSaved ? `<div class="gs-alert gs-alert--success">✓ Settings saved</div>` : ""}
+
+      <div class="gs-card">
+        <div class="gs-card__body" style="display:flex;flex-direction:column;gap:14px;">
+          <div>
+            <div class="gs-section-label">Commit Style</div>
+            <div class="gs-radio-group" style="margin-top:6px;">
+              ${["conventional", "simple", "emoji"].map(style => `
+                <label class="gs-radio-label">
+                  <input type="radio" name="commitStyle" value="${style}"
+                    ${commitStyle === style ? "checked" : ""}
+                    class="gs-radio" data-setting="commitStyle">
+                  <span>${escHtml(style.charAt(0).toUpperCase() + style.slice(1))}</span>
+                </label>
+              `).join("")}
+            </div>
+          </div>
+
+          <div class="gs-toggle-row">
+            <div>
+              <div class="gs-section-label">Auto Staged Check</div>
+              <div style="font-size:10px;color:var(--text-muted);">Warn when no staged changes detected</div>
+            </div>
+            <label class="gs-toggle">
+              <input type="checkbox" id="toggle-auto-staged" ${s?.autoStagedCheck !== false ? "checked" : ""}>
+              <span class="gs-toggle__track"></span>
+            </label>
+          </div>
+
+          <div class="gs-toggle-row">
+            <div>
+              <div class="gs-section-label">SCM Integration</div>
+              <div style="font-size:10px;color:var(--text-muted);">Show button in Source Control title bar</div>
+            </div>
+            <label class="gs-toggle">
+              <input type="checkbox" id="toggle-scm" ${s?.scmIntegration !== false ? "checked" : ""}>
+              <span class="gs-toggle__track"></span>
+            </label>
+          </div>
+
+          <div>
+            <div class="gs-section-label">API Base URL</div>
+            <input type="text" class="gs-form__input" id="input-api-url"
+              value="${escHtml(apiBaseUrl)}"
+              placeholder="https://gitsage-api.up.railway.app"
+              style="margin-top:6px;">
+          </div>
+
+          <button class="gs-btn gs-btn--primary w-full" id="btn-save-settings">
+            Save Settings
+          </button>
+        </div>
+      </div>
+    </div>`;
+}
+
 // ─── Account Tab ──────────────────────────────────────────────────────────────
 
 function buildAccountTab(): string {
-  const user = state.user;
-  if (state.hasJwt && user) {
-    return buildAccountInfo(user);
+  if (state.hasJwt && state.user) {
+    return buildAccountInfo(state.user);
   }
-  return buildAuthForm();
+  return buildAccountSignedOut();
 }
 
 function buildAccountInfo(user: { name: string; email: string }): string {
@@ -444,43 +608,30 @@ function buildAccountInfo(user: { name: string; email: string }): string {
     <div class="gs-animate-in" style="display:flex;flex-direction:column;gap:10px;">
       <div class="gs-card gs-card--sage">
         <div class="gs-card__body" style="display:flex;flex-direction:column;gap:8px;">
-          <div class="gs-section-label">Logged In As</div>
+          <div class="gs-user-avatar">${escHtml(user.name.charAt(0).toUpperCase())}</div>
           <div style="font-size:13px;font-weight:700;color:var(--text)">${escHtml(user.name)}</div>
           <div style="font-size:11px;color:var(--text-muted)">${escHtml(user.email)}</div>
           <div class="gs-btn-row mt-6">
-            <button class="gs-btn gs-btn--ghost" id="btn-logout">Sign Out</button>
-            <button class="gs-btn gs-btn--sky"   id="btn-open-portal">Portal ↗</button>
+            <button class="gs-btn gs-btn--danger" id="btn-logout">Sign Out</button>
+            <button class="gs-btn gs-btn--sky"    id="btn-open-portal">Portal ↗</button>
           </div>
         </div>
       </div>
 
-      ${state.hasApiKey ? `
-        <div class="gs-card">
-          <div class="gs-card__body">
-            <div class="gs-section-label">API Key Status</div>
-            <div class="flex items-center gap-6 mt-6">
-              <div class="gs-header__dot"></div>
-              <span style="font-size:11px;color:var(--sage);font-weight:600;">Key Configured</span>
-            </div>
-            <button class="gs-btn gs-btn--danger w-full" id="btn-clear-key" style="margin-top:10px;font-size:10px;">
-              Clear API Key
-            </button>
+      <div class="gs-card">
+        <div class="gs-card__body">
+          <div class="gs-section-label">API Key Status</div>
+          <div class="flex items-center gap-6 mt-6">
+            <div class="gs-header__dot"></div>
+            <span style="font-size:11px;color:var(--sage);font-weight:600;">
+              ${state.hasApiKey ? "Key Configured" : "No Key — Generate One in Keys Tab"}
+            </span>
+          </div>
+          <div class="gs-btn-row mt-6">
+            <button class="gs-btn gs-btn--ghost w-full" id="btn-goto-keys">Manage Keys</button>
           </div>
         </div>
-      ` : `
-        <div class="gs-card gs-card--error">
-          <div class="gs-card__body">
-            <div class="gs-section-label text-red">No API Key</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
-              Add an API key from the Keys tab or paste one below.
-            </div>
-            <input type="password" class="gs-form__input" id="paste-api-key" placeholder="gs_xxxx..." />
-            <button class="gs-btn gs-btn--primary w-full" id="btn-save-pasted-key" style="margin-top:6px;">
-              Save Key
-            </button>
-          </div>
-        </div>
-      `}
+      </div>
 
       <div class="gs-card">
         <div class="gs-card__body">
@@ -490,7 +641,7 @@ function buildAccountInfo(user: { name: string; email: string }): string {
               Dashboard ↗
             </button>
             <button class="gs-btn gs-btn--ghost w-full" data-open="https://gitsage-ai.vercel.app/docs">
-              Get API Key ↗
+              Docs ↗
             </button>
           </div>
         </div>
@@ -498,56 +649,44 @@ function buildAccountInfo(user: { name: string; email: string }): string {
     </div>`;
 }
 
-function buildAuthForm(): string {
-  const isLogin = state.loginMode === "login";
+function buildAccountSignedOut(): string {
   return `
     <div class="gs-animate-in">
       <div class="gs-empty__icon" style="margin:12px auto 16px;">${svgUser()}</div>
-      <div style="text-align:center;font-size:14px;font-weight:700;color:var(--text);margin-bottom:16px;">
-        ${isLogin ? "Sign in to GitSage" : "Create an Account"}
-      </div>
 
-      ${state.loginError ? `<div class="gs-form__error" style="margin-bottom:10px;">${escHtml(state.loginError)}</div>` : ""}
-
-      <div class="gs-form" id="auth-form">
-        ${!isLogin ? `
-          <div class="gs-form__group">
-            <label class="gs-form__label">Full Name</label>
-            <input type="text" class="gs-form__input" id="auth-name" placeholder="Alex Coder" autocomplete="name" />
+      <div class="gs-card" style="margin-bottom:10px;">
+        <div class="gs-card__body" style="text-align:center;padding:24px 16px;">
+          <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px;">
+            Connect Your Account
           </div>
-        ` : ""}
-        <div class="gs-form__group">
-          <label class="gs-form__label">Email</label>
-          <input type="email" class="gs-form__input" id="auth-email" placeholder="dev@example.com" autocomplete="email" />
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:20px;line-height:1.6;">
+            Sign in with your GitSage account in the browser. Your credentials are securely stored in the OS keychain — never in plain text.
+          </div>
+          <button class="gs-btn gs-btn--primary w-full" id="btn-signin-browser" style="padding:12px;">
+            ${svgUser()} Sign In with Browser
+          </button>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:8px;">
+            Opens a secure browser window to authenticate
+          </div>
         </div>
-        <div class="gs-form__group">
-          <label class="gs-form__label">Password</label>
-          <input type="password" class="gs-form__input" id="auth-password" placeholder="••••••••" autocomplete="${isLogin ? "current-password" : "new-password"}" />
+      </div>
+
+      <div class="gs-card gs-card--sky" style="margin-bottom:10px;">
+        <div class="gs-card__body">
+          <div class="gs-section-label" style="color:var(--sky);">Already have an API key?</div>
+          <div style="font-size:11px;color:var(--text-muted);margin:6px 0 10px;">
+            Paste a <code>gs_...</code> key directly to use GitSage without a full account.
+          </div>
+          <input type="password" class="gs-form__input" id="quick-api-key" placeholder="Paste gs_... key" />
+          <button class="gs-btn gs-btn--ghost w-full" id="btn-quick-key-save" style="margin-top:6px;">
+            Save API Key Only
+          </button>
         </div>
-        <button class="gs-btn gs-btn--primary w-full" id="btn-auth-submit" style="margin-top:4px;">
-          ${isLogin ? "Sign In" : "Create Account"}
-        </button>
       </div>
 
-      <div class="gs-form__toggle" style="margin-top:12px;">
-        ${isLogin
-          ? `No account? <a id="toggle-auth-mode">Sign up free</a>`
-          : `Already have one? <a id="toggle-auth-mode">Sign in</a>`
-        }
-      </div>
-
-      <div style="text-align:center;margin-top:16px;">
-        <div class="gs-section-label" style="justify-content:center;gap:8px;margin-bottom:8px;">or</div>
-        <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px;">Have an API key already?</div>
-        <input type="password" class="gs-form__input" id="quick-api-key" placeholder="Paste gs_... key" />
-        <button class="gs-btn gs-btn--ghost w-full" id="btn-quick-key-save" style="margin-top:6px;">
-          Save API Key Only
-        </button>
-      </div>
-
-      <div style="text-align:center;margin-top:12px;">
-        <button class="gs-btn gs-btn--ghost" data-open="https://gitsage-ai.vercel.app/docs" style="font-size:10px;">
-          Get a Free API Key ↗
+      <div style="text-align:center;margin-top:8px;">
+        <button class="gs-btn gs-btn--ghost" data-open="https://gitsage-ai.vercel.app" style="font-size:10px;">
+          Create free account ↗
         </button>
       </div>
     </div>`;
@@ -579,11 +718,8 @@ function bindEvents(): void {
   // Tab switching
   document.querySelectorAll<HTMLButtonElement>(".gs-tab").forEach((btn) => {
     btn.addEventListener("click", () => {
-      state.activeTab = btn.dataset.tab as AppState["activeTab"];
-      if (state.activeTab === "keys" && state.hasJwt) {
-        vscode.postMessage({ type: "LIST_KEYS" });
-        vscode.postMessage({ type: "GET_USAGE" });
-      }
+      state.activeTab = btn.dataset.tab as TabId;
+      onTabChange(state.activeTab);
       render();
     });
   });
@@ -596,9 +732,9 @@ function bindEvents(): void {
   });
 
   // ── Commit Tab ──
-  on("btn-run-commit",         () => vscode.postMessage({ type: "RUN_COMMIT_COMMAND" }));
-  on("btn-add-key-from-commit",() => { state.activeTab = "account"; render(); });
-  on("btn-accept-commit",      () => {
+  on("btn-run-commit",               () => vscode.postMessage({ type: "RUN_COMMIT_COMMAND" }));
+  on("btn-goto-account-from-commit", () => { state.activeTab = "account"; render(); });
+  on("btn-accept-commit", () => {
     if (!state.commitResult) { return; }
     vscode.postMessage({ type: "COMMIT_ACCEPTED", payload: { message: state.commitResult.commit_message } });
   });
@@ -628,16 +764,23 @@ function bindEvents(): void {
   on("btn-discard-commit", () => { state.commitResult = null; render(); });
 
   // ── Explain Tab ──
-  on("btn-run-explain",         () => vscode.postMessage({ type: "RUN_EXPLAIN_COMMAND" }));
-  on("btn-add-key-from-explain",() => { state.activeTab = "account"; render(); });
-  on("btn-retry-explain",       () => {
+  on("btn-run-explain",              () => vscode.postMessage({ type: "RUN_EXPLAIN_COMMAND" }));
+  on("btn-goto-account-from-explain",() => { state.activeTab = "account"; render(); });
+  on("btn-retry-explain",            () => {
     state.explainResult = null;
     render();
     setTimeout(() => vscode.postMessage({ type: "RUN_EXPLAIN_COMMAND" }), 100);
   });
 
+  // ── History Tab ──
+  on("btn-refresh-history", () => {
+    state.historyLoading = true;
+    render();
+    vscode.postMessage({ type: "GET_GIT_HISTORY" });
+  });
+
   // ── Keys Tab ──
-  on("btn-go-login", () => { state.activeTab = "account"; render(); });
+  on("btn-signin-from-keys", () => vscode.postMessage({ type: "TRIGGER_SIGN_IN" }));
   on("btn-generate-key", () => {
     vscode.postMessage({ type: "GENERATE_KEY", payload: { name: "VS Code Key" } });
   });
@@ -655,66 +798,67 @@ function bindEvents(): void {
     });
   });
 
-  // ── Account Tab ──
-  on("toggle-auth-mode", () => {
-    state.loginMode = state.loginMode === "login" ? "signup" : "login";
-    state.loginError = null;
-    render();
+  // ── Usage Tab ──
+  on("btn-signin-from-usage", () => vscode.postMessage({ type: "TRIGGER_SIGN_IN" }));
+  on("btn-refresh-usage",     () => vscode.postMessage({ type: "GET_USAGE" }));
+
+  // ── Settings Tab ──
+  on("btn-save-settings", () => {
+    const commitStyleEl = document.querySelector<HTMLInputElement>("input[name='commitStyle']:checked");
+    const autoStagedEl  = document.getElementById("toggle-auto-staged") as HTMLInputElement | null;
+    const scmEl         = document.getElementById("toggle-scm")          as HTMLInputElement | null;
+    const apiUrlEl      = document.getElementById("input-api-url")       as HTMLInputElement | null;
+
+    vscode.postMessage({
+      type: "UPDATE_SETTINGS",
+      payload: {
+        commitStyle:    commitStyleEl?.value,
+        autoStagedCheck: autoStagedEl?.checked,
+        scmIntegration:  scmEl?.checked,
+        apiBaseUrl:      apiUrlEl?.value?.trim(),
+      },
+    });
   });
-  on("btn-auth-submit", () => handleAuthSubmit());
+
+  // ── Account Tab ──
+  on("btn-signin-browser", () => vscode.postMessage({ type: "TRIGGER_SIGN_IN" }));
   on("btn-quick-key-save", () => {
     const input = document.getElementById("quick-api-key") as HTMLInputElement | null;
-    const key = input?.value.trim();
+    const key   = input?.value.trim();
     if (!key || !key.startsWith("gs_")) {
       showToast("API keys must start with gs_", "error");
       return;
     }
     vscode.postMessage({ type: "SAVE_API_KEY", payload: { apiKey: key } });
   });
-  on("btn-logout",      () => vscode.postMessage({ type: "LOGOUT" }));
-  on("btn-open-portal", () => vscode.postMessage({ type: "OPEN_EXTERNAL", payload: { url: "https://gitsage-ai.vercel.app/dashboard" } }));
-  on("btn-clear-key",   () => vscode.postMessage({ type: "LOGOUT" }));
-  on("btn-save-pasted-key", () => {
-    const input = document.getElementById("paste-api-key") as HTMLInputElement | null;
-    const key = input?.value.trim();
-    if (!key) { return; }
-    vscode.postMessage({ type: "SAVE_API_KEY", payload: { apiKey: key } });
-  });
+  on("btn-logout",       () => vscode.postMessage({ type: "LOGOUT" }));
+  on("btn-open-portal",  () => vscode.postMessage({ type: "OPEN_EXTERNAL", payload: { url: "https://gitsage-ai.vercel.app/dashboard" } }));
+  on("btn-goto-keys",    () => { state.activeTab = "keys"; vscode.postMessage({ type: "LIST_KEYS" }); render(); });
 }
 
 function on(id: string, handler: () => void): void {
   document.getElementById(id)?.addEventListener("click", handler);
 }
 
-function handleAuthSubmit(): void {
-  const email    = (document.getElementById("auth-email")    as HTMLInputElement)?.value?.trim() ?? "";
-  const password = (document.getElementById("auth-password") as HTMLInputElement)?.value ?? "";
-  const name     = (document.getElementById("auth-name")     as HTMLInputElement)?.value?.trim() ?? "";
-
-  if (!email || !password) {
-    state.loginError = "Email and password are required.";
-    render();
-    return;
-  }
-
-  state.loginError = null;
-  state.loading = true;
-  render();
-
-  if (state.loginMode === "login") {
-    vscode.postMessage({ type: "LOGIN", payload: { email, password } });
-  } else {
-    if (!name) {
-      state.loginError = "Full name is required.";
-      state.loading = false;
-      render();
-      return;
+function onTabChange(tab: TabId): void {
+  if (tab === "history") {
+    if (state.gitHistory.length === 0) {
+      state.historyLoading = true;
+      vscode.postMessage({ type: "GET_GIT_HISTORY" });
     }
-    vscode.postMessage({ type: "SIGNUP", payload: { email, password, name } });
+  }
+  if (tab === "keys" && state.hasJwt) {
+    vscode.postMessage({ type: "LIST_KEYS" });
+  }
+  if (tab === "usage" && state.hasJwt) {
+    vscode.postMessage({ type: "GET_USAGE" });
+  }
+  if (tab === "settings") {
+    vscode.postMessage({ type: "GET_SETTINGS" });
   }
 }
 
-// ─── Message handler (from extension host) ────────────────────────────────────
+// ─── Message Handler (from extension host) ────────────────────────────────────
 
 window.addEventListener("message", (event) => {
   const message = event.data as { type: string; payload?: any };
@@ -735,7 +879,18 @@ window.addEventListener("message", (event) => {
       if (p.hasApiKey !== undefined) { state.hasApiKey = p.hasApiKey; }
       if (p.hasJwt    !== undefined) { state.hasJwt    = p.hasJwt; }
       if (p.user      !== undefined) { state.user      = p.user; }
+      if (!state.hasJwt) { state.user = null; }
       render();
+      break;
+    }
+
+    case "SWITCH_TAB": {
+      const tab = message.payload?.tab as TabId;
+      if (tab) {
+        state.activeTab = tab;
+        onTabChange(tab);
+        render();
+      }
       break;
     }
 
@@ -745,7 +900,6 @@ window.addEventListener("message", (event) => {
       state.loadingStep = "Reading diff context...";
       state.commitResult  = null;
       state.explainResult = null;
-      // Switch to relevant tab
       if (message.payload?.mode === "commit")  { state.activeTab = "commit"; }
       if (message.payload?.mode === "explain") { state.activeTab = "explain"; }
       render();
@@ -761,7 +915,6 @@ window.addEventListener("message", (event) => {
 
     case "ANALYSIS_STEP": {
       state.loadingStep = message.payload?.step ?? "Processing...";
-      // Re-render just the loading text without full re-render
       const el = document.querySelector<HTMLDivElement>(".gs-loading__text");
       if (el) { el.textContent = state.loadingStep; }
       break;
@@ -774,7 +927,6 @@ window.addEventListener("message", (event) => {
       state.activeTab    = "commit";
       state.editMode     = false;
       render();
-      // Animate confidence bar after render
       requestAnimationFrame(() => {
         setTimeout(() => {
           const bar = document.getElementById("conf-bar");
@@ -808,26 +960,6 @@ window.addEventListener("message", (event) => {
       break;
     }
 
-    case "LOGIN_RESPONSE":
-    case "SIGNUP_RESPONSE": {
-      state.loading = false;
-      const p = message.payload;
-      if (p.success) {
-        state.hasJwt = true;
-        state.user   = p.user;
-        state.loginError = null;
-        render();
-        showToast(`Welcome, ${p.user?.name ?? ""}!`, "success");
-        // Fetch keys & stats
-        vscode.postMessage({ type: "LIST_KEYS" });
-        vscode.postMessage({ type: "GET_USAGE" });
-      } else {
-        state.loginError = p.error ?? "Authentication failed";
-        render();
-      }
-      break;
-    }
-
     case "KEYS_RESPONSE": {
       state.keys = message.payload?.keys ?? [];
       render();
@@ -852,7 +984,7 @@ window.addEventListener("message", (event) => {
       const revokedId = message.payload?.id;
       state.keys = state.keys.map(k =>
         k.id === revokedId ? { ...k, status: "revoked" } : k
-      );
+      ) as ApiKey[];
       render();
       showToast("Key revoked.", "info");
       break;
@@ -861,6 +993,27 @@ window.addEventListener("message", (event) => {
     case "USAGE_RESPONSE": {
       state.usageStats = message.payload;
       render();
+      break;
+    }
+
+    case "GIT_HISTORY_RESPONSE": {
+      state.gitHistory   = message.payload?.commits ?? [];
+      state.historyLoading = false;
+      render();
+      break;
+    }
+
+    case "SETTINGS_RESPONSE": {
+      state.settings      = message.payload;
+      state.settingsSaved = false;
+      render();
+      break;
+    }
+
+    case "SETTINGS_SAVED": {
+      state.settingsSaved = true;
+      render();
+      setTimeout(() => { state.settingsSaved = false; render(); }, 2500);
       break;
     }
   }
@@ -888,12 +1041,12 @@ function parseCommitMessage(msg: string): { type?: string; scope?: string; subje
 }
 
 function formatNumber(n: number): string {
-  if (n >= 1000) { return `${(n / 1000).toFixed(1)}k`; }
+  if (n >= 1_000_000) { return `${(n / 1_000_000).toFixed(1)}M`; }
+  if (n >= 1_000)     { return `${(n / 1_000).toFixed(1)}k`; }
   return String(n);
 }
 
 function copyToClipboard(text: string): void {
-  // Webview clipboard API
   const textarea = document.createElement("textarea");
   textarea.value = text;
   document.body.appendChild(textarea);
@@ -902,7 +1055,7 @@ function copyToClipboard(text: string): void {
   document.body.removeChild(textarea);
 }
 
-// ─── SVG Icons (inline, no external deps) ─────────────────────────────────────
+// ─── SVG Icons ────────────────────────────────────────────────────────────────
 
 function svgSparkle(): string {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 5h5l-4 3 1.5 5L12 13l-4 3 1.5-5-4-3h5z"/></svg>`;
@@ -910,8 +1063,17 @@ function svgSparkle(): string {
 function svgBulb(): string {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 017 7c0 2.5-1.3 4.7-3.3 6H8.3A7 7 0 0112 2z"/></svg>`;
 }
+function svgHistory(): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+}
 function svgKey(): string {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6M15.5 7.5l3 3"/></svg>`;
+}
+function svgChart(): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`;
+}
+function svgSettings(): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 }
 function svgUser(): string {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
@@ -934,8 +1096,5 @@ function svgTrash(): string {
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
-// Request initial state from extension host
 vscode.postMessage({ type: "GET_AUTH_STATE" });
-
-// Initial render
 render();

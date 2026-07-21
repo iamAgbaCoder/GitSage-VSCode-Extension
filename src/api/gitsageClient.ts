@@ -246,6 +246,13 @@ export class GitSageClient {
 
   // ── Auth API ─────────────────────────────────────────────────────────────
 
+  async exchangeCodeForToken(code: string, state: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>("POST", "/v1/auth/vscode/token", {
+      code,
+      state,
+    });
+  }
+
   async login(email: string, password: string): Promise<AuthResponse> {
     return this.request<AuthResponse>("POST", "/v1/auth/login", {
       email,
