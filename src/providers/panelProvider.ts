@@ -281,12 +281,6 @@ export class PanelProvider implements vscode.WebviewViewProvider {
         this.postMessage({ type: "SWITCH_TAB", payload });
         break;
       }
-
-      // ── Open external links ──
-      case "OPEN_EXTERNAL": {
-        vscode.env.openExternal(vscode.Uri.parse(payload.url));
-        break;
-      }
     }
   }
 

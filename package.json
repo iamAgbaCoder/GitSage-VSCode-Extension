@@ -76,16 +76,28 @@
         "icon": "$(robot)"
       },
       {
-        "command": "gitsage.setApiKey",
-        "title": "Set API Key",
+        "command": "gitsage.signIn",
+        "title": "Sign In",
         "category": "GitSage",
-        "icon": "$(key)"
+        "icon": "$(sign-in)"
       },
       {
-        "command": "gitsage.clearApiKey",
-        "title": "Clear API Key",
+        "command": "gitsage.signOut",
+        "title": "Sign Out",
         "category": "GitSage",
-        "icon": "$(trash)"
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "gitsage.openAccount",
+        "title": "Manage Account",
+        "category": "GitSage",
+        "icon": "$(account)"
+      },
+      {
+        "command": "gitsage.generateKey",
+        "title": "Generate API Key",
+        "category": "GitSage",
+        "icon": "$(key)"
       },
       {
         "command": "gitsage.scmGenerate",
@@ -102,18 +114,14 @@
         }
       ],
       "commandPalette": [
-        {
-          "command": "gitsage.commit",
-          "when": "workspaceFolderCount > 0"
-        },
-        {
-          "command": "gitsage.explain",
-          "when": "workspaceFolderCount > 0"
-        },
-        {
-          "command": "gitsage.scmGenerate",
-          "when": "false"
-        }
+        { "command": "gitsage.commit",     "when": "workspaceFolderCount > 0" },
+        { "command": "gitsage.explain",    "when": "workspaceFolderCount > 0" },
+        { "command": "gitsage.showPanel"  },
+        { "command": "gitsage.signIn"     },
+        { "command": "gitsage.signOut"    },
+        { "command": "gitsage.openAccount" },
+        { "command": "gitsage.generateKey" },
+        { "command": "gitsage.scmGenerate", "when": "false" }
       ]
     },
     "keybindings": [
@@ -122,6 +130,17 @@
         "key": "ctrl+shift+g ctrl+shift+c",
         "mac": "cmd+shift+g cmd+shift+c",
         "when": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "gitsage.explain",
+        "key": "ctrl+shift+g ctrl+shift+e",
+        "mac": "cmd+shift+g cmd+shift+e",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "gitsage.showPanel",
+        "key": "ctrl+shift+g ctrl+shift+p",
+        "mac": "cmd+shift+g cmd+shift+p"
       }
     ],
     "configuration": {

@@ -895,3 +895,171 @@ body {
 .text-xs  { font-size: 10px; }
 .text-sm  { font-size: 11.5px; }
 .bold     { font-weight: 700; }
+
+/* --- Git History List ---------------------------------------------------- */
+
+.gs-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.gs-history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s;
+}
+
+.gs-history-item:hover { border-color: var(--sage-border); }
+
+.gs-history-item__hash {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--sage);
+  background: var(--sage-dim);
+  border: 1px solid var(--sage-border);
+  border-radius: 4px;
+  padding: 2px 5px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.gs-history-item__main { flex: 1; min-width: 0; }
+
+.gs-history-item__subject {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gs-history-item__meta {
+  font-size: 9.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* --- Settings Toggle Switch ---------------------------------------------- */
+
+.gs-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gs-toggle {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.gs-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.gs-toggle__track {
+  display: block;
+  width: 34px;
+  height: 18px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.gs-toggle__track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.gs-toggle input:checked + .gs-toggle__track {
+  background: var(--sage-dim);
+  border-color: var(--sage-border);
+}
+
+.gs-toggle input:checked + .gs-toggle__track::after {
+  transform: translateX(16px);
+  background: var(--sage);
+  box-shadow: 0 0 6px rgba(34,197,94,0.5);
+}
+
+/* --- Radio Group --------------------------------------------------------- */
+
+.gs-radio-group { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.gs-radio-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: all 0.15s;
+  background: transparent;
+}
+
+.gs-radio-label:has(input:checked) {
+  background: var(--sage-dim);
+  border-color: var(--sage-border);
+  color: var(--sage);
+}
+
+.gs-radio { accent-color: var(--sage); width: 12px; height: 12px; }
+
+/* --- User Avatar --------------------------------------------------------- */
+
+.gs-user-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #16a34a, #0369a1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 800;
+  color: #fff;
+  margin: 0 auto 4px;
+  box-shadow: 0 0 20px rgba(34,197,94,0.25);
+}
+
+/* --- Alert banners ------------------------------------------------------- */
+
+.gs-alert {
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.gs-alert--success { background: var(--sage-dim); border-color: var(--sage-border); color: var(--sage); }
+.gs-alert--error   { background: rgba(248,113,113,0.06); border-color: rgba(248,113,113,0.25); color: var(--red); }
+.gs-alert--info    { background: var(--sky-dim); border-color: var(--sky-border); color: var(--sky); }
