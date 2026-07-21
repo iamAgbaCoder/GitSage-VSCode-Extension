@@ -11,8 +11,20 @@ function resolveVsCodeExecutablePath(): string {
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA;
     if (localAppData) {
+      const stableInstallPath = path.join(localAppData, "Programs", "Microsoft VS Code");
+      const versionedCandidates = fs.existsSync(stableInstallPath)
+        ? fs
+            .readdirSync(stableInstallPath, {
+              withFileTypes: true,
+            })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => path.join(stableInstallPath, entry.name, "Code.exe"))
+        : [];
       const candidates = [
-        path.join(localAppData, "Programs", "Microsoft VS Code", "Code.exe"),
+        path.join(stableInstallPath, "bin", "code.cmd"),
+        path.join(localAppData, "Programs", "Microsoft VS Code Insiders", "bin", "code-insiders.cmd"),
+        ...versionedCandidates,
+        path.join(stableInstallPath, "Code.exe"),
         path.join(localAppData, "Programs", "Microsoft VS Code Insiders", "Code - Insiders.exe"),
       ];
 
@@ -31,7 +43,7 @@ function resolveVsCodeExecutablePath(): string {
 
 async function main() {
   try {
-    const extensionDevelopmentPath = path.resolve(__dirname, "../../..");
+    const extensionDevelopmentPath = path.resolve(__dirname, "../..");
     const extensionTestsPath = path.resolve(__dirname, "./suite/index");
     const vscodeExecutablePath = resolveVsCodeExecutablePath();
 

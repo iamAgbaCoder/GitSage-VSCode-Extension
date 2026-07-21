@@ -183,7 +183,7 @@ export class GitSageClient {
             return reject(new Error(`API error ${code}: ${msg}`));
           }
 
-          resolve(parsed.data as T);
+          resolve((parsed.data ?? parsed) as T);
         });
       });
 

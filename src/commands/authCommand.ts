@@ -11,6 +11,21 @@ import { getKeyManager } from "../auth/keyManager";
 import { getClient } from "../api/gitsageClient";
 import { getPanelProvider } from "../providers/panelProvider";
 
+function assertValidAuthResponse(
+  response: unknown
+): asserts response is { token: string; user: { name: string; email: string } } {
+  const auth = response as { token?: unknown; user?: { name?: unknown; email?: unknown } };
+  if (
+    !auth ||
+    typeof auth.token !== "string" ||
+    !auth.user ||
+    typeof auth.user.name !== "string" ||
+    typeof auth.user.email !== "string"
+  ) {
+    throw new Error("Authentication response was missing a token or user profile.");
+  }
+}
+
 export async function setApiKeyCommand(): Promise<void> {
   const input = await vscode.window.showInputBox({
     title: "GitSage AI — Set API Key",
@@ -100,6 +115,7 @@ export async function handleWebviewLogin(
 ): Promise<{ success: boolean; error?: string; user?: any }> {
   try {
     const response = await getClient().login(email, password);
+    assertValidAuthResponse(response);
     const keyManager = getKeyManager();
 
     await keyManager.saveJwtToken(response.token);
@@ -130,6 +146,7 @@ export async function handleWebviewSignup(
 ): Promise<{ success: boolean; error?: string; user?: any }> {
   try {
     const response = await getClient().signup(email, password, name);
+    assertValidAuthResponse(response);
     const keyManager = getKeyManager();
 
     await keyManager.saveJwtToken(response.token);

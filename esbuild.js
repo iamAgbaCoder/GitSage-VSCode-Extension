@@ -45,18 +45,39 @@ const testConfig = {
   logLevel: "info",
 };
 
+/** @type {import('esbuild').BuildOptions} */
+const testSuiteConfig = {
+  entryPoints: ["src/test/suite/index.ts", "src/test/suite/extension.test.ts"],
+  bundle: true,
+  outdir: "out/test/suite",
+  external: ["vscode"],
+  format: "cjs",
+  platform: "node",
+  target: "node20",
+  sourcemap: !isProduction,
+  minify: isProduction,
+  logLevel: "info",
+};
+
 async function main() {
   if (isWatch) {
     const extCtx = await esbuild.context(extensionConfig);
     const webCtx = await esbuild.context(webviewConfig);
     const testCtx = await esbuild.context(testConfig);
-    await Promise.all([extCtx.watch(), webCtx.watch(), testCtx.watch()]);
+    const testSuiteCtx = await esbuild.context(testSuiteConfig);
+    await Promise.all([
+      extCtx.watch(),
+      webCtx.watch(),
+      testCtx.watch(),
+      testSuiteCtx.watch(),
+    ]);
     console.log("👁  Watching for changes...");
   } else {
     await Promise.all([
       esbuild.build(extensionConfig),
       esbuild.build(webviewConfig),
       esbuild.build(testConfig),
+      esbuild.build(testSuiteConfig),
     ]);
     console.log("✅ Build complete.");
   }
